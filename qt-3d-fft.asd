@@ -13,7 +13,8 @@
                #:mixalot-mp3
                #:qtopengl
                #:cl-opengl
-               #:cl-glu)
+               #:cl-glu
+               #:trivial-main-thread)
   :serial t
   :components ((:file "package")
                (:file "qt-3d-fft")))
