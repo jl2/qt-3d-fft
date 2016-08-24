@@ -7,8 +7,8 @@
 
 (declaim (optimize (speed 3) (safety 1) (size 0) (debug 0)))
 
-(defparameter *fps* 30)
-(defparameter *fft-window-size* (* 512 2))
+(defparameter *fps* 60)
+(defparameter *fft-window-size* 512)
 
 ;; map-val is used to map logical coordinates to screen coordinates.
 (declaim (ftype (cl:function (double-float double-float double-float double-float double-float) double-float) map-val)
@@ -61,40 +61,29 @@
                                             :adjustable nil
                                             :fill-pointer nil))
 
-                (steps :initform 480)
+                (steps :initform 244)
 
                 ;; TODO: Make this a structure like in spiro-animation
-                (a-val :initform 36.0d0)
-                (a-low :initform 1)
-                (a-high :initform 2)
-                (a-scale :initform 0.00010d0)
+                (a-val :initform 16.0d0)
+                (a-buckets :initform '(6 7 8 9 10  16 17 18 19 11 12 13 14 15 1 2 3 4 5 ))
                 (a-offset :initform 0.0d0)
                 
-                (b-val :initform 7.0d0)
-                (b-low :initform 3)
-                (b-high :initform 4)
-                (b-scale :initform 0.00010d0)
+                (b-val :initform 3.0d0)
+                (b-buckets :initform '(6 7 8 9 10))
                 (b-offset :initform 0.0d0)
 
-                (h-val :initform 22.0d0)
-                (h-low :initform 5)
-                (h-high :initform 6)
-                (h-scale :initform 0.00010d0)
+                (h-val :initform 9.0d0)
+                (h-buckets :initform '(16 17 18 19))
                 (h-offset :initform 0.0d0)
 
-                (dt-1 :initform 8.010d0)
-                (dt-1-low :initform 7)
-                (dt-1-high :initform 8)
-                (dt-1-scale :initform 0.00010d0)
+                (dt-1 :initform 1.25d0)
+                (dt-1-buckets :initform '(11 12 13 14 15))
                 (dt-1-offset :initform 0.0d0)
-
-                (dt-2 :initform 8.001d0)
-                (dt-2-low :initform 9)
-                (dt-2-high :initform 10)
-                (dt-2-scale :initform 0.00010d0)
+                
+                (dt-2 :initform 0.25d0)
+                (dt-2-buckets :initform '(1 2 3 4 5))
                 (dt-2-offset :initform 0.0d0)
 
-                (dt-type :initform :over-pi)
                 (spiro-type :initform :epitrochoid))
                (:documentation "The spirograh-drawer widget draws an epitrochoid or hyptrochoid curve using the currently specified parameters."))
 
@@ -126,20 +115,21 @@
   ;;              0 0 0
   ;;              0 1 0))
 
-(declaim (ftype (cl:function (double-float double-float fixnum fixnum bordeaux-fft:complex-sample-array bordeaux-fft:complex-sample-array) double-float) compute-offset)
+(declaim (ftype (cl:function (list
+                              bordeaux-fft:complex-sample-array 
+                              bordeaux-fft:complex-sample-array) double-float) compute-offset)
          (inline compute-offset))
-(defun compute-offset (current scale low high left-fft-data right-fft-data)
-  (declare (type fixnum low high)
-           (type double-float current scale)
+
+(defun compute-offset (buckets left-fft-data right-fft-data)
+  (declare (type list buckets)
            (type bordeaux-fft:complex-sample-array left-fft-data right-fft-data))
-  (the double-float (if (= high low)
-                        current
-                        (let ((rh (if (< high low ) low high))
-                              (rl (if (< high low ) high low)))
-                          (+ current
-                             (loop for idx from rl below rh
-                                summing (aref left-fft-data idx) into total
-                                finally (return (* scale (/ (abs total) (- rh rl))))))))))
+  (the double-float 
+       (loop for idx in buckets
+          summing (if (< idx 0)
+                      (aref left-fft-data (- idx))
+                      (aref right-fft-data idx))
+          into total
+          finally (return (* 0.00001d0 (abs total))))))
 
 (define-override (spirograph-animator paint-g-l paint) ()
   "Handle paint events."
@@ -152,9 +142,13 @@
          (y-aspect-ratio (if (< height width)
                              1.0d0
                              (/ width height 1.0d0)))
-         (rdt-1 (if (eql dt-type :normal)
-                    (+ dt-1-offset dt-1)
-                    (/ pi (+ dt-1-offset dt-1)))))
+         (rdt-1 (+ dt-1-offset dt-1))
+         (location (/ (+ 1 (- (get-internal-real-time) start-time)) 1.0 internal-time-units-per-second))
+         (win-center (ceiling (max 0 
+                                   (- (* 44100 location)
+                                      (round (/ *fft-window-size* 2))))))
+         (x-fun (if (eql spiro-type  :epitrochoid) #'epitrochoid-x #'hypotrochoid-x))
+         (y-fun (if (eql spiro-type  :epitrochoid) #'epitrochoid-y #'hypotrochoid-y)))
 
     (with-finalizing 
         ;; Create a painter object to draw on
@@ -167,89 +161,50 @@
       ;; Clear the background
       (when (and the-mp3 (< (/ (- (get-internal-real-time) start-time) 1.0 internal-time-units-per-second) song-duration))
 
-        (let* ((height (q+:height spirograph-animator))
-               (width (q+:width spirograph-animator))
-
-               (location (/ (+ 10 (- (get-internal-real-time) start-time)) 1.0 internal-time-units-per-second))
-               (win-center (ceiling (max 0 
-                                         (- (* 44100 location)
-                                            (round (/ *fft-window-size* 2)))))))
-
-          (bordeaux-fft:windowed-fft! (mp3-file-left-channel the-mp3)
-                                      window-buffer left-fft-data
-                                      win-center *fft-window-size*)
-          (bordeaux-fft:windowed-fft! (mp3-file-right-channel the-mp3)
-                                      window-buffer right-fft-data
-                                      win-center *fft-window-size*)
-          
-          ;; Actual drawing goes here.  In this case, just a line.
-          (gl:push-matrix)
+        (bordeaux-fft:windowed-fft! (mp3-file-left-channel the-mp3)
+                                    window-buffer left-fft-data
+                                    win-center *fft-window-size* 'bordeaux-fft:triangle)
+        (bordeaux-fft:windowed-fft! (mp3-file-right-channel the-mp3) 
+                                    window-buffer right-fft-data
+                                    win-center *fft-window-size* 'bordeaux-fft:triangle)
+        
+        ;; Actual drawing goes here.  In this case, just a line.
+        (gl:push-matrix)
 
 
-          ;; TODO: Use "modern" OpenGL
-          (if (eql spiro-type  :epitrochoid)
-              (gl:with-primitives :lines
-                (gl:color 1 0 0)
-                (loop
-                   for i below steps
-                   for cur-t = 0.0d0 then (* i rdt-1)
-                   do
-                     (let ((r-a (+ a-val a-offset))
-                           (r-b (+ b-val b-offset))
-                           (r-h (+ h-val h-offset))
-                           (r-dt-2 (if (eql dt-type :normal)
-                                       (+ dt-2 dt-2-offset)
-                                       (/ pi (+ dt-2 dt-2-offset)))))
+        ;; TODO: Use "modern" OpenGL
+        (gl:with-primitives :lines
+          (gl:color 1 0 0)
+          (loop
+             for i below steps
+             for cur-t = 0.0d0 then (* i rdt-1)
+             do
+               (let ((r-a (+ a-val a-offset))
+                     (r-b (+ b-val b-offset))
+                     (r-h (+ h-val h-offset))
+                     (r-dt-2 (+ dt-2 dt-2-offset)))
 
-                       (gl:vertex (map-val (* x-aspect-ratio (epitrochoid-x r-a r-b r-h cur-t))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  (map-val (* x-aspect-ratio (epitrochoid-y r-a r-b r-h cur-t))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  0.0d0)
-                       (gl:vertex (map-val (* x-aspect-ratio (epitrochoid-x r-a r-b r-h (+ r-dt-2 cur-t)))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  (map-val (* x-aspect-ratio (epitrochoid-y r-a r-b r-h (+ r-dt-2 cur-t)))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  0.0d0))))
-              (gl:with-primitives :lines
-                (gl:color 1 0 0)
-                (loop
-                   for i below steps
-                   for cur-t = 0.0d0 then (* i rdt-1)
-                   do
-                     (let ((r-a (+ a-val a-offset))
-                           (r-b (+ b-val b-offset))
-                           (r-h (+ h-val h-offset))
-                           (r-dt-2 (if (eql dt-type :normal)
-                                       (+ dt-2 dt-2-offset)
-                                       (/ pi (+ dt-2 dt-2-offset)))))
-
-                       (gl:vertex (map-val (* x-aspect-ratio (hypotrochoid-x r-a r-b r-h cur-t))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  (map-val (* x-aspect-ratio (hypotrochoid-y r-a r-b r-h cur-t))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  0.0d0)
-                       (gl:vertex (map-val (* x-aspect-ratio (hypotrochoid-x r-a r-b r-h (+ r-dt-2 cur-t)))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  (map-val (* x-aspect-ratio (hypotrochoid-y r-a r-b r-h (+ r-dt-2 cur-t)))
-                                           (- max-radius) max-radius
-                                           -1.0d0 1.0d0)
-                                  0.0d0)))))
-
-          ;; Update offsets based on fft-data
-          (setf a-offset (compute-offset a-offset a-scale a-low a-high left-fft-data right-fft-data))
-          (setf b-offset (compute-offset b-offset b-scale b-low b-high left-fft-data right-fft-data))
-          (setf h-offset (compute-offset h-offset h-scale h-low h-high left-fft-data right-fft-data))
-          (setf dt-1-offset (compute-offset dt-1-offset dt-1-scale dt-1-low dt-1-high left-fft-data right-fft-data))
-          (setf dt-2-offset (compute-offset dt-2-offset dt-2-scale dt-2-low dt-2-high left-fft-data right-fft-data))
-          (gl:pop-matrix))))))
+                 (gl:vertex (map-val (* x-aspect-ratio (funcall x-fun  r-a r-b r-h cur-t))
+                                     (- max-radius) max-radius
+                                     -1.0d0 1.0d0)
+                            (map-val (* y-aspect-ratio (funcall y-fun r-a r-b r-h cur-t))
+                                     (- max-radius) max-radius
+                                     -1.0d0 1.0d0)
+                            0.0d0)
+                 (gl:vertex (map-val (* x-aspect-ratio (funcall x-fun r-a r-b r-h (+ r-dt-2 cur-t)))
+                                     (- max-radius) max-radius
+                                     -1.0d0 1.0d0)
+                            (map-val (* y-aspect-ratio (funcall y-fun r-a r-b r-h (+ r-dt-2 cur-t)))
+                                     (- max-radius) max-radius
+                                     -1.0d0 1.0d0)
+                            0.0d0))))
+        ;; Update offsets based on fft-data
+        (incf a-offset (compute-offset a-buckets left-fft-data right-fft-data))
+        (incf b-offset (compute-offset b-buckets left-fft-data right-fft-data))
+        (incf h-offset (compute-offset h-buckets left-fft-data right-fft-data))
+        (incf dt-1-offset (compute-offset dt-1-buckets left-fft-data right-fft-data))
+        (incf dt-2-offset (compute-offset dt-2-buckets left-fft-data right-fft-data))
+        (gl:pop-matrix)))))
 
 (define-widget spirograph-widget (QWidget)
                ()
@@ -262,148 +217,59 @@
 ;; TODO: Use macros or something to make this less repetitive
 (define-subwidget (spirograph-widget a-val-spin) (q+:make-qdoublespinbox spirograph-widget)
   "The 'a' value spinbox."
-  (q+:set-decimals a-val-spin 5)
-  (q+:set-single-step a-val-spin 0.1)
+  (q+:set-decimals a-val-spin 2)
+  (q+:set-single-step a-val-spin 0.25)
   (q+:set-maximum a-val-spin 10000.0)
-  (q+:set-minimum a-val-spin 0.00001)
+  (q+:set-minimum a-val-spin 0.0)
   (q+:set-value a-val-spin (slot-value fft-viewer 'a-val)))
 
-(define-subwidget (spirograph-widget a-scale-spin) (q+:make-qdoublespinbox spirograph-widget)
-  "The 'a-scale' value spinbox."
-  (q+:set-decimals a-scale-spin 5)
-  (q+:set-single-step a-scale-spin 0.1)
-  (q+:set-maximum a-scale-spin 10000.0)
-  (q+:set-minimum a-scale-spin 0.00001)
-  (q+:set-value a-scale-spin (slot-value fft-viewer 'a-scale)))
-
-(define-subwidget (spirograph-widget a-low-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'a-low' value spinbox."
-  (q+:set-maximum a-low-spin *fft-window-size*)
-  (q+:set-minimum a-low-spin 1)
-  (q+:set-value a-low-spin (slot-value fft-viewer 'a-low)))
-
-(define-subwidget (spirograph-widget a-high-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'a-high' value spinbox."
-  (q+:set-maximum a-high-spin *fft-window-size*)
-  (q+:set-minimum a-high-spin 1)
-  (q+:set-value a-high-spin (slot-value fft-viewer 'a-high)))
-
+(define-subwidget (spirograph-widget a-buckets-edit) (q+:make-qlineedit spirograph-widget)
+  (setf (q+:text a-buckets-edit) (format nil "~{~d~^ ~}" (slot-value fft-viewer 'a-buckets))))
 
 (define-subwidget (spirograph-widget b-val-spin) (q+:make-qdoublespinbox spirograph-widget)
   "The 'b' value spinbox."
-  (q+:set-decimals b-val-spin 5)
-  (q+:set-single-step b-val-spin 0.1)
+  (q+:set-decimals b-val-spin 2)
+  (q+:set-single-step b-val-spin 0.25)
   (q+:set-maximum b-val-spin 10000.0)
-  (q+:set-minimum b-val-spin 0.00001)
+  (q+:set-minimum b-val-spin 0.0)
   (q+:set-value b-val-spin (slot-value fft-viewer 'b-val)))
 
-(define-subwidget (spirograph-widget b-scale-spin) (q+:make-qdoublespinbox spirograph-widget)
-  "The 'b-scale' value spinbox."
-  (q+:set-decimals b-scale-spin 5)
-  (q+:set-single-step b-scale-spin 0.1)
-  (q+:set-maximum b-scale-spin 10000.0)
-  (q+:set-minimum b-scale-spin 0.00001)
-  (q+:set-value b-scale-spin (slot-value fft-viewer 'b-scale)))
-
-(define-subwidget (spirograph-widget b-low-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'b-low' value spinbox."
-  (q+:set-maximum b-low-spin *fft-window-size*)
-  (q+:set-minimum b-low-spin 1)
-  (q+:set-value b-low-spin (slot-value fft-viewer 'b-low)))
-
-(define-subwidget (spirograph-widget b-high-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'b-high' value spinbox."
-  (q+:set-maximum b-high-spin *fft-window-size*)
-  (q+:set-minimum b-high-spin 1)
-  (q+:set-value b-high-spin (slot-value fft-viewer 'b-high)))
-
+(define-subwidget (spirograph-widget b-buckets-edit) (q+:make-qlineedit spirograph-widget)
+  (setf (q+:text b-buckets-edit) (format nil "~{~d~^ ~}" (slot-value fft-viewer 'b-buckets))))
 
 
 (define-subwidget (spirograph-widget h-val-spin) (q+:make-qdoublespinbox spirograph-widget)
   "The 'h' value spinbox."
-  (q+:set-decimals h-val-spin 5)
-  (q+:set-single-step h-val-spin 0.1)
+  (q+:set-decimals h-val-spin 2)
+  (q+:set-single-step h-val-spin 0.25)
   (q+:set-maximum h-val-spin 10000.0)
-  (q+:set-minimum h-val-spin 0.00001)
+  (q+:set-minimum h-val-spin 0.0)
   (q+:set-value h-val-spin (slot-value fft-viewer 'h-val)))
 
-(define-subwidget (spirograph-widget h-scale-spin) (q+:make-qdoublespinbox spirograph-widget)
-  "The 'h-scale' value spinbox."
-  (q+:set-decimals h-scale-spin 5)
-  (q+:set-single-step h-scale-spin 0.1)
-  (q+:set-maximum h-scale-spin 10000.0)
-  (q+:set-minimum h-scale-spin 0.00001)
-  (q+:set-value h-scale-spin (slot-value fft-viewer 'h-scale)))
-
-(define-subwidget (spirograph-widget h-low-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'h-low' value spinbox."
-  (q+:set-maximum h-low-spin *fft-window-size*)
-  (q+:set-minimum h-low-spin 1)
-  (q+:set-value h-low-spin (slot-value fft-viewer 'h-low)))
-
-(define-subwidget (spirograph-widget h-high-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'h-high' value spinbox."
-  (q+:set-maximum h-high-spin *fft-window-size*)
-  (q+:set-minimum h-high-spin 1)
-  (q+:set-value h-high-spin (slot-value fft-viewer 'h-high)))
-
+(define-subwidget (spirograph-widget h-buckets-edit) (q+:make-qlineedit spirograph-widget)
+  (setf (q+:text h-buckets-edit) (format nil "~{~d~^ ~}" (slot-value fft-viewer 'h-buckets))))
 
 (define-subwidget (spirograph-widget dt-1-spin) (q+:make-qdoublespinbox spirograph-widget)
   "The 'dt-1' value spinbox."
   (q+:set-decimals dt-1-spin 5)
-  (q+:set-single-step dt-1-spin 0.1)
-  (q+:set-minimum dt-1-spin 0.00001)
+  (q+:set-single-step dt-1-spin 0.01)
+  (q+:set-minimum dt-1-spin 0.0)
   (q+:set-maximum dt-1-spin (* pi 1000))
   (q+:set-value dt-1-spin (slot-value fft-viewer 'dt-1)))
 
-(define-subwidget (spirograph-widget dt-1-scale-spin) (q+:make-qdoublespinbox spirograph-widget)
-  "The 'dt-1-scale' value spinbox."
-  (q+:set-decimals dt-1-scale-spin 5)
-  (q+:set-single-step dt-1-scale-spin 0.1)
-  (q+:set-maximum dt-1-scale-spin 10000.0)
-  (q+:set-minimum dt-1-scale-spin 0.00001)
-  (q+:set-value dt-1-scale-spin (slot-value fft-viewer 'dt-1-scale)))
-
-(define-subwidget (spirograph-widget dt-1-low-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'dt-1-low' value spinbox."
-  (q+:set-maximum dt-1-low-spin *fft-window-size*)
-  (q+:set-minimum dt-1-low-spin 1)
-  (q+:set-value dt-1-low-spin (slot-value fft-viewer 'dt-1-low)))
-
-(define-subwidget (spirograph-widget dt-1-high-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'dt-1-high' value spinbox."
-  (q+:set-maximum dt-1-high-spin *fft-window-size*)
-  (q+:set-minimum dt-1-high-spin 1)
-  (q+:set-value dt-1-high-spin (slot-value fft-viewer 'dt-1-high)))
-
+(define-subwidget (spirograph-widget dt-1-buckets-edit) (q+:make-qlineedit spirograph-widget)
+  (setf (q+:text dt-1-buckets-edit) (format nil "~{~d~^ ~}" (slot-value fft-viewer 'dt-1-buckets))))
 
 (define-subwidget (spirograph-widget dt-2-spin) (q+:make-qdoublespinbox spirograph-widget)
   "The 'dt-2' value spinbox."
   (q+:set-decimals dt-2-spin 5)
-  (q+:set-single-step dt-2-spin 0.1)
-  (q+:set-minimum dt-2-spin 0.00001)
+  (q+:set-single-step dt-2-spin 0.01)
+  (q+:set-minimum dt-2-spin 0.0)
   (q+:set-maximum dt-2-spin (* pi 1000))
   (q+:set-value dt-2-spin (slot-value fft-viewer 'dt-2)))
 
-(define-subwidget (spirograph-widget dt-2-scale-spin) (q+:make-qdoublespinbox spirograph-widget)
-  "The 'dt-2-scale' value spinbox."
-  (q+:set-decimals dt-2-scale-spin 5)
-  (q+:set-single-step dt-2-scale-spin 0.1)
-  (q+:set-maximum dt-2-scale-spin 10000.0)
-  (q+:set-minimum dt-2-scale-spin 0.00001)
-  (q+:set-value dt-2-scale-spin (slot-value fft-viewer 'dt-2-scale)))
-
-(define-subwidget (spirograph-widget dt-2-low-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'dt-2-low' value spinbox."
-  (q+:set-maximum dt-2-low-spin *fft-window-size*)
-  (q+:set-minimum dt-2-low-spin 1)
-  (q+:set-value dt-2-low-spin (slot-value fft-viewer 'dt-2-low)))
-
-(define-subwidget (spirograph-widget dt-2-high-spin) (q+:make-qspinbox spirograph-widget)
-  "The 'dt-2-high' value spinbox."
-  (q+:set-maximum dt-2-high-spin *fft-window-size*)
-  (q+:set-minimum dt-2-high-spin 1)
-  (q+:set-value dt-2-high-spin (slot-value fft-viewer 'dt-2-high)))
+(define-subwidget (spirograph-widget dt-2-buckets-edit) (q+:make-qlineedit spirograph-widget)
+  (setf (q+:text dt-2-buckets-edit) (format nil "~{~d~^ ~}" (slot-value fft-viewer 'dt-2-buckets))))
 
 
 (define-subwidget (spirograph-widget epitrochoid-button) (q+:make-qradiobutton "Epitrochoid")
@@ -425,19 +291,6 @@
   (q+:set-minimum steps-spin 4)
   (q+:set-value steps-spin (slot-value fft-viewer 'steps)))
 
-
-(define-subwidget (spirograph-widget use-dt-button) (q+:make-qradiobutton "dt = dt")
-  "dt = dt")
-
-(define-subwidget (spirograph-widget pi-over-dt-button) (q+:make-qradiobutton "dt = π/dt (Symetric)")
-  "dt = π/dt"
-  (q+:set-checked pi-over-dt-button t))
-
-(define-subwidget (spirograph-widget dt-button-group) (q+:make-qbuttongroup spirograph-widget)
-  "Button group to ensure radio buttons are exclusive."
-  (q+:set-exclusive dt-button-group t)
-  (q+:add-button dt-button-group use-dt-button)
-  (q+:add-button dt-button-group pi-over-dt-button))
 
 (define-subwidget (spirograph-widget reset-button) (q+:make-qpushbutton "Reset" spirograph-widget)
   "Reset all-offsets to 0")
@@ -465,53 +318,26 @@
   ;; Repaint to reflect the changes
   (q+:repaint fft-viewer))
 
-(define-slot (spirograph-widget dt-changed) ()
-  "Handle radio button changes that hcange the curve type."
-  (declare (connected pi-over-dt-button (released)))
-  (declare (connected use-dt-button (released)))
-  (cond 
-    ;; Epitrochoid selected
-    ((q+:is-checked use-dt-button)
-     (setf (slot-value fft-viewer 'dt-type) :normal))
+(define-slot (spirograph-widget editing-finished) ()
+  (declare (connected a-buckets-edit (editing-finished void)))
+  (declare (connected b-buckets-edit (editing-finished void)))
+  (declare (connected h-buckets-edit (editing-finished void)))
+  (declare (connected dt-1-buckets-edit (editing-finished void)))
+  (declare (connected dt-2-buckets-edit (editing-finished void)))
 
-    ;; Hypotrochoid selected
-    ((q+:is-checked pi-over-dt-button)
-     (setf (slot-value fft-viewer 'dt-type) :over-pi))
-    
-    ;; One of the above should always be true, but just in case...
-    ;; Print a warning and toggle the  epitrochoid-button
-    (t
-     (format t "Warning: No dt type selected, defaulting to normal.~%")
-     (setf (slot-value fft-viewer 'dt-type) :normal))
-     (q+:set-checked use-dt-button t))
+  (setf (slot-value fft-viewer 'a-buckets) (read-from-string (format nil "( ~a )" (q+:text a-buckets-edit))))
+  (setf (slot-value fft-viewer 'b-buckets) (read-from-string (format nil "( ~a )" (q+:text b-buckets-edit))))
+  (setf (slot-value fft-viewer 'h-buckets) (read-from-string (format nil "( ~a )" (q+:text h-buckets-edit))))
+  (setf (slot-value fft-viewer 'dt-1-buckets) (read-from-string (format nil "( ~a )" (q+:text dt-1-buckets-edit))))
+  (setf (slot-value fft-viewer 'dt-2-buckets) (read-from-string (format nil "( ~a )" (q+:text dt-2-buckets-edit))))
 
-  ;; Repaint to reflect the changes
   (q+:repaint fft-viewer))
+
 
 (define-slot (spirograph-widget steps-changed) ((value int))
   "Handle changes to the steps-spin box."
   (declare (connected steps-spin (value-changed int)))
-  (declare (connected a-low-spin (value-changed int)))
-  (declare (connected a-high-spin (value-changed int)))
-  (declare (connected b-low-spin (value-changed int)))
-  (declare (connected b-high-spin (value-changed int)))
-  (declare (connected h-low-spin (value-changed int)))
-  (declare (connected h-high-spin (value-changed int)))
-  (declare (connected dt-1-low-spin (value-changed int)))
-  (declare (connected dt-1-high-spin (value-changed int)))
-  (declare (connected dt-2-low-spin (value-changed int)))
-  (declare (connected dt-2-high-spin (value-changed int)))
   (setf (slot-value fft-viewer 'steps) (q+:value steps-spin))
-  (setf (slot-value fft-viewer 'a-low) (q+:value a-low-spin))
-  (setf (slot-value fft-viewer 'a-high) (q+:value a-high-spin))
-  (setf (slot-value fft-viewer 'b-low) (q+:value b-low-spin))
-  (setf (slot-value fft-viewer 'b-high) (q+:value b-high-spin))
-  (setf (slot-value fft-viewer 'h-low) (q+:value h-low-spin))
-  (setf (slot-value fft-viewer 'h-high) (q+:value h-high-spin))
-  (setf (slot-value fft-viewer 'dt-1-low) (q+:value dt-1-low-spin))
-  (setf (slot-value fft-viewer 'dt-1-high) (q+:value dt-1-high-spin))
-  (setf (slot-value fft-viewer 'dt-2-low) (q+:value dt-2-low-spin))
-  (setf (slot-value fft-viewer 'dt-2-high) (q+:value dt-2-high-spin))
   (q+:repaint fft-viewer))
 
 (define-slot (spirograph-widget values-changed) ((value double))
@@ -519,24 +345,14 @@
   (declare (connected a-val-spin (value-changed double)))
   (declare (connected b-val-spin (value-changed double)))
   (declare (connected h-val-spin (value-changed double)))
-  (declare (connected a-scale-spin (value-changed double)))
-  (declare (connected b-scale-spin (value-changed double)))
-  (declare (connected h-scale-spin (value-changed double)))
   (declare (connected dt-1-spin (value-changed double)))
   (declare (connected dt-2-spin (value-changed double)))
-  (declare (connected dt-1-scale-spin (value-changed double)))
-  (declare (connected dt-2-scale-spin (value-changed double)))
   
   (setf (slot-value fft-viewer 'a-val) (q+:value a-val-spin))
   (setf (slot-value fft-viewer 'b-val) (q+:value b-val-spin))
   (setf (slot-value fft-viewer 'h-val) (q+:value h-val-spin))
-  (setf (slot-value fft-viewer 'a-scale) (q+:value a-scale-spin))
-  (setf (slot-value fft-viewer 'b-scale) (q+:value b-scale-spin))
-  (setf (slot-value fft-viewer 'h-scale) (q+:value h-scale-spin))
   (setf (slot-value fft-viewer 'dt-1) (q+:value dt-1-spin))
   (setf (slot-value fft-viewer 'dt-2) (q+:value dt-2-spin))
-  (setf (slot-value fft-viewer 'dt-1-scale) (q+:value dt-1-scale-spin))
-  (setf (slot-value fft-viewer 'dt-2-scale) (q+:value dt-2-scale-spin))
   (q+:repaint fft-viewer))
 
 
@@ -545,10 +361,7 @@
   "Layout all of the control widgets in a vertical box layout."
 
   ;; Create horizontal layouts to hold the labels and spinboxes
-  (let (;; (a-inner (q+:make-qhboxlayout))
-        ;; (b-inner (q+:make-qhboxlayout))
-        ;; (h-inner (q+:make-qhboxlayout))
-        (a-layout (q+:make-qhboxlayout))
+  (let ((a-layout (q+:make-qhboxlayout))
         (b-layout (q+:make-qhboxlayout))
         (h-layout (q+:make-qhboxlayout))
         (dt-1-layout (q+:make-qhboxlayout))
@@ -558,38 +371,26 @@
     ;; Populate the horizontal layouts and add them to the top level vertical layout
     (q+:add-widget a-layout (q+:make-qlabel "A: " spirograph-widget))
     (q+:add-widget a-layout a-val-spin)
-    (q+:add-widget a-layout a-scale-spin)
-    (q+:add-widget a-layout a-low-spin)
-    (q+:add-widget a-layout a-high-spin)
+    (q+:add-widget a-layout a-buckets-edit)
 
     (q+:add-widget b-layout (q+:make-qlabel "B: " spirograph-widget))
     (q+:add-widget b-layout b-val-spin)
-    (q+:add-widget b-layout b-scale-spin)
-    (q+:add-widget b-layout b-low-spin)
-    (q+:add-widget b-layout b-high-spin)
+    (q+:add-widget b-layout b-buckets-edit)
 
     (q+:add-widget h-layout (q+:make-qlabel "H: " spirograph-widget))
     (q+:add-widget h-layout h-val-spin)
-    (q+:add-widget h-layout h-scale-spin)
-    (q+:add-widget h-layout h-low-spin)
-    (q+:add-widget h-layout h-high-spin)
+    (q+:add-widget h-layout h-buckets-edit)
 
     (q+:add-widget dt-1-layout (q+:make-qlabel "dt1: " spirograph-widget))
     (q+:add-widget dt-1-layout dt-1-spin)
-    (q+:add-widget dt-1-layout dt-1-scale-spin)
-    (q+:add-widget dt-1-layout dt-1-low-spin)
-    (q+:add-widget dt-1-layout dt-1-high-spin)
+    (q+:add-widget dt-1-layout dt-1-buckets-edit)
 
     (q+:add-widget dt-2-layout (q+:make-qlabel "dt2: " spirograph-widget))
     (q+:add-widget dt-2-layout dt-2-spin)
-    (q+:add-widget dt-2-layout dt-2-scale-spin)
-    (q+:add-widget dt-2-layout dt-2-low-spin)
-    (q+:add-widget dt-2-layout dt-2-high-spin)
+    (q+:add-widget dt-2-layout dt-2-buckets-edit)
 
     (q+:add-widget other-layout (q+:make-qlabel "steps: " spirograph-widget))
     (q+:add-widget other-layout steps-spin)
-    (q+:add-widget other-layout use-dt-button)
-    (q+:add-widget other-layout pi-over-dt-button)
 
     ;; Add the radio buttons directly to the vertical layout
     (q+:add-widget other-layout epitrochoid-button)
@@ -686,5 +487,3 @@
   "Create the main window."
   (trivial-main-thread:call-in-main-thread #'mixalot:main-thread-init)
   (with-main-window (window (make-instance 'main-window))))
-
-
