@@ -7,74 +7,95 @@
 
 (declaim (optimize (speed 3) (safety 1) (size 0) (debug 0)))
 
-(defparameter *fps* 60)
+(defparameter *fps* 30)
 (defparameter *fft-window-size* (* 512 2))
 
 ;; map-val is used to map logical coordinates to screen coordinates.
-(declaim (inline map-val epitrochoid-x epitrochoid-y hypotrochoid-x hypotrochoid-y))
+(declaim (ftype (cl:function (double-float double-float double-float double-float double-float) double-float) map-val)
+         (ftype (cl:function (double-float double-float double-float double-float) double-float) epitrochoid-x)
+         (ftype (cl:function (double-float double-float double-float double-float) double-float) epitrochoid-y)
+         (ftype (cl:function (double-float double-float double-float double-float) double-float) hypotrochoid-x)
+         (ftype (cl:function (double-float double-float double-float double-float) double-float) hypotrochoid-y)
+         (inline map-val epitrochoid-x epitrochoid-y hypotrochoid-x hypotrochoid-y))
+
 (defun map-val (x xmin xmax new-xmin new-xmax)
   "Map a value from the range xmin,xmax to the range new-xmin,new-xmax"
-  (+ (* (/ (- x xmin) (- xmax xmin)) (- new-xmax new-xmin)) new-xmin))
+  (declare (type double-float x xmin xmax new-xmin new-xmax))
+  (the double-float (+ (* (/ (- x xmin) (- xmax xmin)) (- new-xmax new-xmin)) new-xmin)))
 
 (defun epitrochoid-x (a b h tv)
   "X component of the parametric equation for an epitrochoid curve."
-  (- (* (+ a b) (cos tv)) (* h (cos (* tv (/ (+ a b) b))))))
+  (declare (type double-float a b h tv))
+  (the double-float (- (* (+ a b) (cos tv)) (* h (cos (* tv (/ (+ a b) b)))))))
 
 (defun epitrochoid-y (a b h tv)
   "Y component of the parametric equation for an epitrochoid curve."
-  (- (* (+ a b) (sin tv)) (* h (sin (* tv (/ (+ a b) b))))))
+  (declare (type double-float a b h tv))
+  (the double-float (- (* (+ a b) (sin tv)) (* h (sin (* tv (/ (+ a b) b)))))))
 
 (defun hypotrochoid-x (a b h tv)
   "X component of the parametric equation for an hypotrochoid curve."
-  (+ (* (- a b) (cos tv)) (* h (cos (* tv (/ (- a b) b))))))
+  (declare (type double-float a b h tv))
+  (the double-float (+ (* (- a b) (cos tv)) (* h (cos (* tv (/ (- a b) b)))))))
 
 (defun hypotrochoid-y (a b h tv)
   "Y component of the parametric equation for an hypotrochoid curve."
-  (+ (* (- a b) (sin tv)) (* h (sin (* tv (/ (- a b) b))))))
+  (declare (type double-float a b h tv))
+  (the double-float (+ (* (- a b) (sin tv)) (* h (sin (* tv (/ (- a b) b)))))))
 
 
 (define-widget spirograph-animator (QGLWidget)
                ((the-mp3 :initform nil)
                 (start-time :initform 0)
                 (song-duration :initform 0)
+                (window-buffer :initform (make-array *fft-window-size* 
+                                           :element-type '(complex double-float)
+                                           :adjustable nil
+                                           :fill-pointer nil))
+                (left-fft-data :initform (make-array *fft-window-size* 
+                                           :element-type '(complex double-float)
+                                           :adjustable nil
+                                           :fill-pointer nil))
+                (right-fft-data :initform (make-array *fft-window-size* 
+                                            :element-type '(complex double-float)
+                                            :adjustable nil
+                                            :fill-pointer nil))
 
                 (steps :initform 480)
 
                 ;; TODO: Make this a structure like in spiro-animation
-                (a-val :initform 36.0)
+                (a-val :initform 36.0d0)
                 (a-low :initform 1)
                 (a-high :initform 2)
-                (a-scale :initform 0.00010)
-                (a-offset :initform 0.0)
+                (a-scale :initform 0.00010d0)
+                (a-offset :initform 0.0d0)
                 
-                (b-val :initform 7.0)
+                (b-val :initform 7.0d0)
                 (b-low :initform 3)
                 (b-high :initform 4)
-                (b-scale :initform 0.00010)
-                (b-offset :initform 0.0)
+                (b-scale :initform 0.00010d0)
+                (b-offset :initform 0.0d0)
 
-                (h-val :initform 22.0)
+                (h-val :initform 22.0d0)
                 (h-low :initform 5)
                 (h-high :initform 6)
-                (h-scale :initform 0.0010)
-                (h-offset :initform 0.0)
+                (h-scale :initform 0.00010d0)
+                (h-offset :initform 0.0d0)
 
-                (dt-1 :initform 8.010)
+                (dt-1 :initform 8.010d0)
                 (dt-1-low :initform 7)
                 (dt-1-high :initform 8)
-                (dt-1-scale :initform 0.00010)
-                (dt-1-offset :initform 0.0)
+                (dt-1-scale :initform 0.00010d0)
+                (dt-1-offset :initform 0.0d0)
 
-                (dt-2 :initform 8.001)
+                (dt-2 :initform 8.001d0)
                 (dt-2-low :initform 9)
                 (dt-2-high :initform 10)
-                (dt-2-scale :initform 0.00010)
-                (dt-2-offset :initform 0.0)
+                (dt-2-scale :initform 0.00010d0)
+                (dt-2-offset :initform 0.0d0)
 
                 (dt-type :initform :over-pi)
-
-                (x-function :initform #'epitrochoid-x)
-                (y-function :initform #'epitrochoid-y))
+                (spiro-type :initform :epitrochoid))
                (:documentation "The spirograh-drawer widget draws an epitrochoid or hyptrochoid curve using the currently specified parameters."))
 
 (define-subwidget (spirograph-animator timer) (q+:make-qtimer spirograph-animator)
@@ -105,100 +126,130 @@
   ;;              0 0 0
   ;;              0 1 0))
 
-(declaim (inline compute-offset))
+(declaim (ftype (cl:function (double-float double-float fixnum fixnum bordeaux-fft:complex-sample-array bordeaux-fft:complex-sample-array) double-float) compute-offset)
+         (inline compute-offset))
 (defun compute-offset (current scale low high left-fft-data right-fft-data)
-  (if (= high low)
-      current
-      (let ((rh (if (< high low ) low high))
-            (rl (if (< high low ) high low)))
-        (+ current
-           (loop for idx from rl below rh
-              summing (aref left-fft-data idx) into total
-              finally (return (* scale (/ (abs total) (- rh rl)))))))))
+  (declare (type fixnum low high)
+           (type double-float current scale)
+           (type bordeaux-fft:complex-sample-array left-fft-data right-fft-data))
+  (the double-float (if (= high low)
+                        current
+                        (let ((rh (if (< high low ) low high))
+                              (rl (if (< high low ) high low)))
+                          (+ current
+                             (loop for idx from rl below rh
+                                summing (aref left-fft-data idx) into total
+                                finally (return (* scale (/ (abs total) (- rh rl))))))))))
 
 (define-override (spirograph-animator paint-g-l paint) ()
   "Handle paint events."
-  (let* ((max-radius (* 1.1 (+ a-offset a-val b-offset b-val h-offset h-val)))
+  (let* ((max-radius (* 1.1d0 (+ a-offset a-val b-offset b-val h-offset h-val)))
          (width (q+:width spirograph-animator))
          (height (q+:height spirograph-animator))
          (x-aspect-ratio (if (< height width)
-                             (/ height width 1.0)
-                             1.0))
+                             (/ height width 1.0d0)
+                             1.0d0))
          (y-aspect-ratio (if (< height width)
-                             1.0
-                             (/ width height 1.0)))
+                             1.0d0
+                             (/ width height 1.0d0)))
          (rdt-1 (if (eql dt-type :normal)
                     (+ dt-1-offset dt-1)
                     (/ pi (+ dt-1-offset dt-1)))))
 
-    ;; Define some local functions for convenience
-    (flet (
-           (declare (inline xmapper ymapper spirograph-x spirograph-y))
+    (with-finalizing 
+        ;; Create a painter object to draw on
+        ((painter (q+:make-qpainter spirograph-animator)))
 
-           ;; xmapper maps logical x coordinates in the range x-min to x-max to screen coordinates in the range 0 to width
-           (xmapper (x) (map-val (* x-aspect-ratio x) (- max-radius) max-radius -1.0 1.0))
+      (gl:matrix-mode :modelview)
+      (gl:load-identity)
 
-           ;; ymapper does the same thing, but for y coordinates
-           (ymapper (y) (map-val (* y-aspect-ratio y) (- max-radius) max-radius -1.0 1.0))
-           
-           ;; spirograph-x and spirograph-y hide funcall and make the code easier to read below
-           (spirograph-x (a b h tv) (funcall x-function a b h tv))
-           (spirograph-y (a b h tv) (funcall y-function a b h tv)))
-      (with-finalizing 
-          ;; Create a painter object to draw on
-          ((painter (q+:make-qpainter spirograph-animator)))
+      (gl:clear :color-buffer :depth-buffer)
+      ;; Clear the background
+      (when (and the-mp3 (< (/ (- (get-internal-real-time) start-time) 1.0 internal-time-units-per-second) song-duration))
 
-        (gl:matrix-mode :modelview)
-        (gl:load-identity)
+        (let* ((height (q+:height spirograph-animator))
+               (width (q+:width spirograph-animator))
 
-        (gl:clear :color-buffer :depth-buffer)
-        ;; Clear the background
-        (when (and the-mp3 (< (/ (- (get-internal-real-time) start-time) 1.0 internal-time-units-per-second) song-duration))
+               (location (/ (+ 10 (- (get-internal-real-time) start-time)) 1.0 internal-time-units-per-second))
+               (win-center (ceiling (max 0 
+                                         (- (* 44100 location)
+                                            (round (/ *fft-window-size* 2)))))))
 
-          (let* ((height (q+:height spirograph-animator))
-                 (width (q+:width spirograph-animator))
-
-                 (location (/ (+ 10 (- (get-internal-real-time) start-time)) 1.0 internal-time-units-per-second))
-                 (win-center (ceiling (max 0 
-                                           (- (* 44100 location)
-                                              (round (/ *fft-window-size* 2))))))
-
-                 (left-fft-data (bordeaux-fft:windowed-fft (mp3-file-left-channel the-mp3) win-center *fft-window-size*))
-                 (right-fft-data (bordeaux-fft:windowed-fft (mp3-file-right-channel the-mp3) win-center *fft-window-size*)))
-            
-            ;; Actual drawing goes here.  In this case, just a line.
-            (gl:push-matrix)
+          (bordeaux-fft:windowed-fft! (mp3-file-left-channel the-mp3)
+                                      window-buffer left-fft-data
+                                      win-center *fft-window-size*)
+          (bordeaux-fft:windowed-fft! (mp3-file-right-channel the-mp3)
+                                      window-buffer right-fft-data
+                                      win-center *fft-window-size*)
+          
+          ;; Actual drawing goes here.  In this case, just a line.
+          (gl:push-matrix)
 
 
-            ;; TODO: Use "modern" OpenGL
-            (gl:with-primitives :lines
-              (gl:color 1 0 0)
-              (loop
-                 for i below steps
-                 for cur-t = 0.0 then (* i rdt-1)
-                 do
-                   (let ((r-a (+ a-val a-offset))
-                         (r-b (+ b-val b-offset))
-                         (r-h (+ h-val h-offset))
-                         (r-dt-2 (if (eql dt-type :normal)
-                                     (+ dt-2 dt-2-offset)
-                                     (/ pi (+ dt-2 dt-2-offset)))))
+          ;; TODO: Use "modern" OpenGL
+          (if (eql spiro-type  :epitrochoid)
+              (gl:with-primitives :lines
+                (gl:color 1 0 0)
+                (loop
+                   for i below steps
+                   for cur-t = 0.0d0 then (* i rdt-1)
+                   do
+                     (let ((r-a (+ a-val a-offset))
+                           (r-b (+ b-val b-offset))
+                           (r-h (+ h-val h-offset))
+                           (r-dt-2 (if (eql dt-type :normal)
+                                       (+ dt-2 dt-2-offset)
+                                       (/ pi (+ dt-2 dt-2-offset)))))
 
-                     (gl:vertex (xmapper (spirograph-x r-a r-b r-h cur-t))
-                                (ymapper (spirograph-y r-a r-b r-h cur-t))
-                                0.0)
-                     (gl:vertex (xmapper (spirograph-x r-a r-b r-h (+ r-dt-2 cur-t)))
-                                (ymapper (spirograph-y r-a r-b r-h (+ r-dt-2 cur-t)))
-                                0.0))))
+                       (gl:vertex (map-val (* x-aspect-ratio (epitrochoid-x r-a r-b r-h cur-t))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  (map-val (* x-aspect-ratio (epitrochoid-y r-a r-b r-h cur-t))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  0.0d0)
+                       (gl:vertex (map-val (* x-aspect-ratio (epitrochoid-x r-a r-b r-h (+ r-dt-2 cur-t)))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  (map-val (* x-aspect-ratio (epitrochoid-y r-a r-b r-h (+ r-dt-2 cur-t)))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  0.0d0))))
+              (gl:with-primitives :lines
+                (gl:color 1 0 0)
+                (loop
+                   for i below steps
+                   for cur-t = 0.0d0 then (* i rdt-1)
+                   do
+                     (let ((r-a (+ a-val a-offset))
+                           (r-b (+ b-val b-offset))
+                           (r-h (+ h-val h-offset))
+                           (r-dt-2 (if (eql dt-type :normal)
+                                       (+ dt-2 dt-2-offset)
+                                       (/ pi (+ dt-2 dt-2-offset)))))
 
-            ;; Update offsets based on fft-data
-            (setf a-offset (compute-offset a-offset a-scale a-low a-high left-fft-data right-fft-data))
-            (setf b-offset (compute-offset b-offset b-scale b-low b-high left-fft-data right-fft-data))
-            (setf h-offset (compute-offset h-offset h-scale h-low h-high left-fft-data right-fft-data))
-            (setf dt-1-offset (compute-offset dt-1-offset dt-1-scale dt-1-low dt-1-high left-fft-data right-fft-data))
-            (setf dt-2-offset (compute-offset dt-2-offset dt-2-scale dt-2-low dt-2-high left-fft-data right-fft-data))
+                       (gl:vertex (map-val (* x-aspect-ratio (hypotrochoid-x r-a r-b r-h cur-t))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  (map-val (* x-aspect-ratio (hypotrochoid-y r-a r-b r-h cur-t))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  0.0d0)
+                       (gl:vertex (map-val (* x-aspect-ratio (hypotrochoid-x r-a r-b r-h (+ r-dt-2 cur-t)))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  (map-val (* x-aspect-ratio (hypotrochoid-y r-a r-b r-h (+ r-dt-2 cur-t)))
+                                           (- max-radius) max-radius
+                                           -1.0d0 1.0d0)
+                                  0.0d0)))))
 
-            (gl:pop-matrix)))))))
+          ;; Update offsets based on fft-data
+          (setf a-offset (compute-offset a-offset a-scale a-low a-high left-fft-data right-fft-data))
+          (setf b-offset (compute-offset b-offset b-scale b-low b-high left-fft-data right-fft-data))
+          (setf h-offset (compute-offset h-offset h-scale h-low h-high left-fft-data right-fft-data))
+          (setf dt-1-offset (compute-offset dt-1-offset dt-1-scale dt-1-low dt-1-high left-fft-data right-fft-data))
+          (setf dt-2-offset (compute-offset dt-2-offset dt-2-scale dt-2-low dt-2-high left-fft-data right-fft-data))
+          (gl:pop-matrix))))))
 
 (define-widget spirograph-widget (QWidget)
                ()
@@ -398,21 +449,18 @@
   (cond 
     ;; Epitrochoid selected
     ((q+:is-checked epitrochoid-button)
-     (setf (slot-value fft-viewer 'x-function) #'epitrochoid-x)
-     (setf (slot-value fft-viewer 'y-function) #'epitrochoid-y))
+     (setf (slot-value fft-viewer 'spiro-type) :epitrochoid))
 
     ;; Hypotrochoid selected
     ((q+:is-checked hypotrochoid-button)
-     (setf (slot-value fft-viewer 'x-function) #'hypotrochoid-x)
-     (setf (slot-value fft-viewer 'y-function) #'hypotrochoid-y))
+     (setf (slot-value fft-viewer 'spiro-type) :hypotrochoid))
     
     ;; One of the above should always be true, but just in case...
     ;; Print a warning and toggle the  epitrochoid-button
     (t
      (format t "Warning: No type selected, defaulting to epitrochoid.~%")
      (q+:set-checked epitrochoid-button t)
-     (setf (slot-value fft-viewer 'x-function) #'epitrochoid-x)
-     (setf (slot-value fft-viewer 'y-function) #'epitrochoid-y)))
+     (setf (slot-value fft-viewer 'spiro-type) :epitrochoid)))
 
   ;; Repaint to reflect the changes
   (q+:repaint fft-viewer))
@@ -482,9 +530,9 @@
   (setf (slot-value fft-viewer 'a-val) (q+:value a-val-spin))
   (setf (slot-value fft-viewer 'b-val) (q+:value b-val-spin))
   (setf (slot-value fft-viewer 'h-val) (q+:value h-val-spin))
-  (setf (slot-value fft-viewer 'a-scale) (q+:value a-val-spin))
-  (setf (slot-value fft-viewer 'b-scale) (q+:value b-val-spin))
-  (setf (slot-value fft-viewer 'h-scale) (q+:value h-val-spin))
+  (setf (slot-value fft-viewer 'a-scale) (q+:value a-scale-spin))
+  (setf (slot-value fft-viewer 'b-scale) (q+:value b-scale-spin))
+  (setf (slot-value fft-viewer 'h-scale) (q+:value h-scale-spin))
   (setf (slot-value fft-viewer 'dt-1) (q+:value dt-1-spin))
   (setf (slot-value fft-viewer 'dt-2) (q+:value dt-2-spin))
   (setf (slot-value fft-viewer 'dt-1-scale) (q+:value dt-1-scale-spin))
@@ -565,11 +613,11 @@
 (define-slot (spirograph-widget reset-pressed) ()
   "Handle the reset button."
   (declare (connected reset-button (released)))
-  (setf (slot-value fft-viewer 'a-offset) 0.0)
-  (setf (slot-value fft-viewer 'b-offset) 0.0)
-  (setf (slot-value fft-viewer 'h-offset) 0.0)
-  (setf (slot-value fft-viewer 'dt-1-offset) 0.0)
-  (setf (slot-value fft-viewer 'dt-2-offset) 0.0))
+  (setf (slot-value fft-viewer 'a-offset) 0.0d0)
+  (setf (slot-value fft-viewer 'b-offset) 0.0d0)
+  (setf (slot-value fft-viewer 'h-offset) 0.0d0)
+  (setf (slot-value fft-viewer 'dt-1-offset) 0.0d0)
+  (setf (slot-value fft-viewer 'dt-2-offset) 0.0d0))
 
 
 
@@ -579,11 +627,11 @@
          (sduration (mp3-file-duration-in-seconds new-mp3-file))
          (tframes (ceiling (* sduration *fps*))))
 
-    (setf (slot-value fft-viewer 'a-offset) 0.0)
-    (setf (slot-value fft-viewer 'b-offset) 0.0)
-    (setf (slot-value fft-viewer 'h-offset) 0.0)
-    (setf (slot-value fft-viewer 'dt-1-offset) 0.0)
-    (setf (slot-value fft-viewer 'dt-2-offset) 0.0)
+    (setf (slot-value fft-viewer 'a-offset) 0.0d0)
+    (setf (slot-value fft-viewer 'b-offset) 0.0d0)
+    (setf (slot-value fft-viewer 'h-offset) 0.0d0)
+    (setf (slot-value fft-viewer 'dt-1-offset) 0.0d0)
+    (setf (slot-value fft-viewer 'dt-2-offset) 0.0d0)
 
     (setf (slot-value fft-viewer 'the-mp3) new-mp3-file)
     (setf (slot-value fft-viewer 'song-duration) sduration)
