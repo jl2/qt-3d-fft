@@ -2,13 +2,31 @@
 ;;;;
 ;;;; Copyright (c) 2016 Jeremiah LaRocco <jeremiah.larocco@gmail.com>
 
+
+;; TODO:
+;; Read and write configuration to a text file
+;; Save to movie file.
+
+
+
+;; Astropilot configuration:
+;; a 12.25  (1 2 3 4 5 6 7 15 16 17 18 19)
+;; b 5.00  (6 7 8 9 10)
+;; h 12.00 (16 16 17 17 18 18 19 19)
+;; dt1 1.25 (1 5 11 12 13 14 15)
+;; dt2 0.25 (1 1 1 2 2 2 3 3 3 4 4 4 5 5 5)
+;; epitrochoid
+
+
+
 (in-package #:qt-3d-fft)
 (named-readtables:in-readtable :qtools)
 
 (declaim (optimize (speed 3) (safety 1) (size 0) (debug 0)))
 
-(defparameter *fps* 60)
+(defparameter *fps* 30)
 (defparameter *fft-window-size* 512)
+
 
 ;; map-val is used to map logical coordinates to screen coordinates.
 (declaim (ftype (cl:function (double-float double-float double-float double-float double-float) double-float) map-val)
@@ -43,7 +61,6 @@
   (declare (type double-float a b h tv))
   (the double-float (+ (* (- a b) (sin tv)) (* h (sin (* tv (/ (- a b) b)))))))
 
-
 (define-widget spirograph-animator (QGLWidget)
                ((the-mp3 :initform nil)
                 (start-time :initform 0)
@@ -61,30 +78,30 @@
                                             :adjustable nil
                                             :fill-pointer nil))
 
-                (steps :initform 244)
+                (steps :initform 300)
 
                 ;; TODO: Make this a structure like in spiro-animation
                 (a-val :initform 16.0d0)
-                (a-buckets :initform '(6 7 8 9 10  16 17 18 19 11 12 13 14 15 1 2 3 4 5 ))
+                (a-buckets :initform '(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19))
                 (a-offset :initform 0.0d0)
                 
-                (b-val :initform 3.0d0)
+                (b-val :initform 7.0d0)
                 (b-buckets :initform '(6 7 8 9 10))
                 (b-offset :initform 0.0d0)
 
                 (h-val :initform 9.0d0)
-                (h-buckets :initform '(16 17 18 19))
+                (h-buckets :initform '(16 16 17 17 18 18 19 19))
                 (h-offset :initform 0.0d0)
 
                 (dt-1 :initform 1.25d0)
-                (dt-1-buckets :initform '(11 12 13 14 15))
+                (dt-1-buckets :initform '(1 2 3 4 5 11 12 13 14 15))
                 (dt-1-offset :initform 0.0d0)
                 
                 (dt-2 :initform 0.25d0)
-                (dt-2-buckets :initform '(1 2 3 4 5))
+                (dt-2-buckets :initform '(1 1 1 1 2 2 2 2 3 3 3 3 4 4 4 4 5 5 5 5))
                 (dt-2-offset :initform 0.0d0)
 
-                (spiro-type :initform :epitrochoid))
+                (spiro-type :initform :hypotrochoid))
                (:documentation "The spirograh-drawer widget draws an epitrochoid or hyptrochoid curve using the currently specified parameters."))
 
 (define-subwidget (spirograph-animator timer) (q+:make-qtimer spirograph-animator)
@@ -215,6 +232,11 @@
 
 
 ;; TODO: Use macros or something to make this less repetitive
+
+(define-subwidget (spirograph-widget mp3-file-edit) (q+:make-qlineedit spirograph-widget)
+  "The currently open file."
+  (setf (q+:read-only mp3-file-edit) t))
+
 (define-subwidget (spirograph-widget a-val-spin) (q+:make-qdoublespinbox spirograph-widget)
   "The 'a' value spinbox."
   (q+:set-decimals a-val-spin 2)
@@ -355,13 +377,12 @@
   (setf (slot-value fft-viewer 'dt-2) (q+:value dt-2-spin))
   (q+:repaint fft-viewer))
 
-
-
 (define-subwidget (spirograph-widget control-layout) (q+:make-qvboxlayout spirograph-widget)
   "Layout all of the control widgets in a vertical box layout."
 
   ;; Create horizontal layouts to hold the labels and spinboxes
-  (let ((a-layout (q+:make-qhboxlayout))
+  (let ((file-layout (q+:make-qhboxlayout))
+        (a-layout (q+:make-qhboxlayout))
         (b-layout (q+:make-qhboxlayout))
         (h-layout (q+:make-qhboxlayout))
         (dt-1-layout (q+:make-qhboxlayout))
@@ -369,6 +390,10 @@
         (other-layout (q+:make-qhboxlayout)))
     
     ;; Populate the horizontal layouts and add them to the top level vertical layout
+
+    (q+:add-widget file-layout (q+:make-qlabel "Filename: " spirograph-widget))
+    (q+:add-widget file-layout mp3-file-edit)
+
     (q+:add-widget a-layout (q+:make-qlabel "A: " spirograph-widget))
     (q+:add-widget a-layout a-val-spin)
     (q+:add-widget a-layout a-buckets-edit)
@@ -398,6 +423,7 @@
 
     (q+:add-widget other-layout reset-button)
 
+    (q+:add-layout control-layout file-layout)
     (q+:add-layout control-layout a-layout)
     (q+:add-layout control-layout b-layout)
     (q+:add-layout control-layout h-layout)
@@ -411,16 +437,17 @@
 
 (define-signal (spirograph-widget open-mp3) (string))
 
+(defun reset-offsets (viewer)
+  (setf (slot-value viewer 'a-offset) 0.0d0)
+  (setf (slot-value viewer 'b-offset) 0.0d0)
+  (setf (slot-value viewer 'h-offset) 0.0d0)
+  (setf (slot-value viewer 'dt-1-offset) 0.0d0)
+  (setf (slot-value viewer 'dt-2-offset) 0.0d0))
+
 (define-slot (spirograph-widget reset-pressed) ()
   "Handle the reset button."
   (declare (connected reset-button (released)))
-  (setf (slot-value fft-viewer 'a-offset) 0.0d0)
-  (setf (slot-value fft-viewer 'b-offset) 0.0d0)
-  (setf (slot-value fft-viewer 'h-offset) 0.0d0)
-  (setf (slot-value fft-viewer 'dt-1-offset) 0.0d0)
-  (setf (slot-value fft-viewer 'dt-2-offset) 0.0d0))
-
-
+  (reset-offsets fft-viewer))
 
 (define-slot (spirograph-widget open-mp3) ((file-name string))
   (declare (connected spirograph-widget (open-mp3 string)))
@@ -428,12 +455,8 @@
          (sduration (mp3-file-duration-in-seconds new-mp3-file))
          (tframes (ceiling (* sduration *fps*))))
 
-    (setf (slot-value fft-viewer 'a-offset) 0.0d0)
-    (setf (slot-value fft-viewer 'b-offset) 0.0d0)
-    (setf (slot-value fft-viewer 'h-offset) 0.0d0)
-    (setf (slot-value fft-viewer 'dt-1-offset) 0.0d0)
-    (setf (slot-value fft-viewer 'dt-2-offset) 0.0d0)
-
+    (setf (q+:text mp3-file-edit) file-name)
+    (reset-offsets fft-viewer)
     (setf (slot-value fft-viewer 'the-mp3) new-mp3-file)
     (setf (slot-value fft-viewer 'song-duration) sduration)
     (setf (slot-value fft-viewer 'start-time) (get-internal-real-time))))
@@ -450,8 +473,8 @@
 
 
 (define-menu (main-window File)
-  (:item ("Open" (ctrl o))
-         (open-file main-window))
+  (:item ("Open MP3" (ctrl o))
+         (open-mp3 main-window))
   (:separator)
   (:item ("Quit" (ctrl alt q))
          (q+:close main-window)))
@@ -462,12 +485,11 @@
           main-window "About"
           "Interactively view and manipulate FFT data.")))
 
-
 (define-subwidget (main-window spirograph-viewer) (make-instance 'spirograph-widget)
   "The central spirograph-widget.")
 
 
-(define-slot (main-window open open-file) ()
+(define-slot (main-window open open-mp3) ()
   (let ((filename (q+:qfiledialog-get-open-file-name main-window "Select File"
                                                      (q+:qdesktopservices-storage-location 
                                                       (q+:qdesktopservices.music-location))
