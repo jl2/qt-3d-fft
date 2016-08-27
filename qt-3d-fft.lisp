@@ -30,8 +30,8 @@
   (a-var (make-animated-var :val 16.0d0 :buckets '(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19)) :type animated-var)
   (b-var (make-animated-var :val 7.0d0 :buckets '(6 7 8 9 10)) :type animated-var)
   (h-var (make-animated-var :val 9.0d0 :buckets '(16 16 17 17 18 18 19 19)) :type animated-var)
-  (dt-1-var (make-animated-var :val 1.15d0 :buckets '(16 16 17 17 18 18 19 19)) :type animated-var)
-  (dt-2-var  (make-animated-var :val 0.25d0 :buckets '(1 2 3 4 5 11 12 13 14 15)) :type animated-var)
+  (dt-1-var (make-animated-var :val 1.15d0 :buckets '()) :type animated-var)
+  (dt-2-var  (make-animated-var :val 0.25d0 :buckets '()) :type animated-var)
   (stype :epitrochoid :type t))
 
 (defun reset-spirograph (spiro)
@@ -108,20 +108,25 @@
   (q+:repaint spirograph-animator))
 
 (define-override (spirograph-animator initialize-G-L) ()
-  (gl:clear-color 0 0 0 1)
+  ;; (gl:clear-color 0 0 0 1)
   (gl:enable :line-smooth :polygon-smooth
              :depth-test :depth-clamp :alpha-test))
 
 (define-override (spirograph-animator resize-g-l) (width height)
 
-  (gl:viewport 0 0 width height)
-  (gl:matrix-mode :projection)
-  (gl:load-identity)
-  (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0)
-  (gl:matrix-mode :modelview)
-  (gl:clear-color 0 0 0 1)
-  (gl:enable :line-smooth :polygon-smooth
-             :depth-test :depth-clamp :alpha-test))
+  ;; (gl:viewport 0 0 width height)
+  ;; (gl:matrix-mode :projection)
+  ;; (gl:load-identity)
+  ;; (glu:perspective 50 (/ height width) 1.0 5000.0)
+  ;; (glu:look-at 8 8 8 
+  ;;              0 0 0
+  ;;              0 1 0)
+  ;; (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0)
+  ;; (gl:matrix-mode :modelview)
+  ;; (gl:clear-color 0 0 0 1)
+  ;; (gl:enable :line-smooth :polygon-smooth
+  ;;            :depth-test :depth-clamp :alpha-test)
+  )
 
 ;; (glu:perspective 50 (/ height width) 1.0 5000.0)
   ;; (glu:look-at 1200 1200 1200 
@@ -129,11 +134,16 @@
   ;;              0 1 0))
 
 (defun max-radius (spiro)
-  (with-slots (a-var b-var h-var) spiro
-    (* 1.1d0
-       (+ (with-slots (val offset) a-var (+ val offset))
-          (with-slots (val offset) b-var (+ val offset))
-          (with-slots (val offset) h-var (+ val offset))))))
+  (with-slots (a-var b-var h-var stype) spiro
+    (if (eql stype :epitrochoid)
+             (* 1.05d0
+                (+ (with-slots (val offset) a-var (+ val offset))
+                   (with-slots (val offset) b-var (+ val offset))
+                   (with-slots (val offset) h-var (+ val offset))))
+             (* 1.05d0
+                (+ (- (with-slots (val offset) a-var (+ val offset))
+                      (with-slots (val offset) b-var (+ val offset)))
+                   (with-slots (val offset) h-var (+ val offset)))))))
 
 (define-override (spirograph-animator paint-g-l paint) ()
   "Handle paint events."
@@ -148,7 +158,7 @@
            (y-aspect-ratio (if (< height width)
                                1.0d0
                                (/ width height 1.0d0)))
-           (rdt-1 (+ (+ (animated-var-val dt-1-var)) (animated-var-offset dt-1-var)))
+           (rdt-1 (+ (animated-var-val dt-1-var) (animated-var-offset dt-1-var)))
            (location (/ (+ 1 (- (get-internal-real-time) start-time)) 1.0 internal-time-units-per-second))
            (win-center (ceiling (max 0 
                                      (- (* 44100 location)
@@ -160,15 +170,24 @@
           ;; Create a painter object to draw on
           ((painter (q+:make-qpainter spirograph-animator)))
 
-        ;; (q+:begin-native-painting painter)
+        (q+:begin-native-painting painter)
+        (gl:viewport 0 0 width height)
+        (gl:matrix-mode :projection)
+        (gl:load-identity)
+        (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0)
+
         ;; (gl:viewport 0 0 width height)
         ;; (gl:matrix-mode :projection)
         ;; (gl:load-identity)
-        ;; (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0)
-        ;; (gl:matrix-mode :modelview)
-        ;; (gl:clear-color 0 0 0 1)
-        ;; (gl:enable :line-smooth :polygon-smooth
-        ;;            :depth-test :depth-clamp :alpha-test)
+        ;; (glu:perspective 50 (/ height width) 1.0 5000.0)
+        ;; (glu:look-at 3 3 3
+        ;;              0 0 0
+        ;;              0 1 0)
+
+        (gl:clear-color 0 0 0 1)
+        (gl:enable :line-smooth :polygon-smooth
+                   :depth-test :depth-clamp :alpha-test)
+
         (gl:matrix-mode :modelview)
         (gl:load-identity)
 
@@ -215,14 +234,14 @@
                               0.0d0))))
 
         ;; Update offsets based on fft-data
-        (step-var a-var left-fft-data right-fft-data)
-        (step-var b-var left-fft-data right-fft-data)
-        (step-var h-var left-fft-data right-fft-data)
-        (step-var dt-1-var left-fft-data right-fft-data)
-        (step-var dt-2-var left-fft-data right-fft-data)
+        (step-var a-var 0.00005d0 left-fft-data right-fft-data)
+        (step-var b-var 0.00005d0 left-fft-data right-fft-data)
+        (step-var h-var 0.00005d0 left-fft-data right-fft-data)
+        (step-var dt-1-var 0.00005d0 left-fft-data right-fft-data)
+        (step-var dt-2-var 0.00005d0 left-fft-data right-fft-data)
         (gl:pop-matrix))
         (q+:swap-buffers spirograph-animator)
-        ;; (q+:end-native-painting painter)
+        (q+:end-native-painting painter)
         ))))
 
 (define-widget spirograph-widget (QWidget)
