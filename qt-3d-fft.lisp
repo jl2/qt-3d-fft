@@ -16,13 +16,12 @@
 ;; epitrochoid
 
 
-
 (in-package #:qt-3d-fft)
 (named-readtables:in-readtable :qtools)
 
-(declaim (optimize (speed 3) (safety 3) (size 0) (debug 3)))
+(declaim (optimize (speed 3) (safety 0) (size 0) (debug 0)))
 
-(defparameter *fps* 60)
+(defparameter *fps* 30)
 (defparameter *fft-window-size* 1024)
 
 (defstruct spirograph
@@ -101,7 +100,8 @@
 
 (define-initializer (spirograph-animator setup)
   (q+:start timer (round (/ 1000 *fps*)))
-  (setf (q+:auto-fill-background spirograph-animator) nil))
+  (setf (q+:auto-fill-background spirograph-animator) nil)
+  (setf (q+:auto-buffer-swap spirograph-animator) nil))
 
 (define-slot (spirograph-animator tick) ()
   (declare (connected timer (timeout)))
@@ -115,10 +115,13 @@
 (define-override (spirograph-animator resize-g-l) (width height)
 
   (gl:viewport 0 0 width height)
-  
   (gl:matrix-mode :projection)
   (gl:load-identity)
-  (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0))
+  (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0)
+  (gl:matrix-mode :modelview)
+  (gl:clear-color 0 0 0 1)
+  (gl:enable :line-smooth :polygon-smooth
+             :depth-test :depth-clamp :alpha-test))
 
 ;; (glu:perspective 50 (/ height width) 1.0 5000.0)
   ;; (glu:look-at 1200 1200 1200 
@@ -157,6 +160,15 @@
           ;; Create a painter object to draw on
           ((painter (q+:make-qpainter spirograph-animator)))
 
+        ;; (q+:begin-native-painting painter)
+        ;; (gl:viewport 0 0 width height)
+        ;; (gl:matrix-mode :projection)
+        ;; (gl:load-identity)
+        ;; (gl:ortho -1.0 1.0 -1.0 1.0 -1.0 1.0)
+        ;; (gl:matrix-mode :modelview)
+        ;; (gl:clear-color 0 0 0 1)
+        ;; (gl:enable :line-smooth :polygon-smooth
+        ;;            :depth-test :depth-clamp :alpha-test)
         (gl:matrix-mode :modelview)
         (gl:load-identity)
 
@@ -208,7 +220,10 @@
         (step-var h-var left-fft-data right-fft-data)
         (step-var dt-1-var left-fft-data right-fft-data)
         (step-var dt-2-var left-fft-data right-fft-data)
-        (gl:pop-matrix))))))
+        (gl:pop-matrix))
+        (q+:swap-buffers spirograph-animator)
+        ;; (q+:end-native-painting painter)
+        ))))
 
 (define-widget spirograph-widget (QWidget)
                ()
