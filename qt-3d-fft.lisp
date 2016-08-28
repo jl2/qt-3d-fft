@@ -21,7 +21,7 @@
 
 (declaim (optimize (speed 3) (safety 0) (size 0) (debug 0)))
 
-(defparameter *fps* 30)
+(defparameter *fps* 60)
 (defparameter *fft-window-size* 1024)
 
 (defstruct spirograph
@@ -237,8 +237,8 @@
         (step-var a-var 0.00005d0 left-fft-data right-fft-data)
         (step-var b-var 0.00005d0 left-fft-data right-fft-data)
         (step-var h-var 0.00005d0 left-fft-data right-fft-data)
-        (step-var dt-1-var 0.00005d0 left-fft-data right-fft-data)
-        (step-var dt-2-var 0.00005d0 left-fft-data right-fft-data)
+        (step-var dt-1-var 0.000005d0 left-fft-data right-fft-data)
+        (step-var dt-2-var 0.000005d0 left-fft-data right-fft-data)
         (gl:pop-matrix))
         (q+:swap-buffers spirograph-animator)
         (q+:end-native-painting painter)
